@@ -8,7 +8,15 @@ A Claude Code mod that shows what your work costs and how far along it is.
 - This week (all projects), this project, this task (session) and the last turn
 - For each: estimated API cost, tokens and time
 
-**Progress bar** while Claude works, in the band above the prompt and on the working spinner:
+**Status scanner** in the band above the prompt, with the percent done next to it:
+
+- Red light sweeping both ways while Claude works
+- Solid green when the turn is finished
+- Pulsing amber when a question waits for you (a question box, a plan to approve, or a turn that ends asking you something)
+
+The desktop app draws it as an animated vector image; the terminal draws a plain colored bar.
+
+**Progress line** on the working spinner:
 
 ```
 ████░░░░░░ 37% · step 2/4: Write code · 1m 0s · ~1m 40s left

@@ -16,9 +16,79 @@ const limits = atom({ plugin: 'usage-stats', key: 'limits' } as const, [], { sha
 const plan = atom({ plugin: 'usage-stats', key: 'plan' } as const, [], { shape: 's1' })
 const turnStart = atom({ plugin: 'usage-stats', key: 'turnStart' } as const, 0)
 const nowAtom = atom({ plugin: 'usage-stats', key: 'now' } as const, 0)
+// idle (no bar), work (red scanner), done (green), ask (orange: a question waits for the person)
+const status = atom({ plugin: 'usage-stats', key: 'status' } as const, 'idle')
 
 const PLAN_TOOL = 'mcp__ccd_turn__update_plan'
 const WRAP_TOOL = 'mcp__ccd_turn__wrap_up'
+// Tools that stop and wait for the person's answer.
+const ASK_TOOLS = /^(AskUserQuestion|ExitPlanMode)$/
+
+// Knight Rider scanner, drawn as one SVG the desktop animates itself (SMIL), so no redraw per frame:
+// a beveled housing, a recessed slot of LED cells, a light that sweeps both ways with a fading trail,
+// bloom between the cells and a glass highlight on top. Solid green when done, breathing amber when asked.
+const SCAN_PX = { width: 168, height: 20 }
+const TONES = {
+  work: { core: '#fff3ea', hot: '#ff2414', deep: '#7a0700', off: '#2a0504' },
+  done: { core: '#effff4', hot: '#25e06a', deep: '#0a6a2c', off: '#062612' },
+  ask: { core: '#fff7e6', hot: '#ffa20f', deep: '#7d4600', off: '#2b1802' },
+}
+function scannerSvg(state: string): string {
+  const t = TONES[state as keyof typeof TONES] ?? TONES.work
+  const W = 336
+  const H = 40
+  const n = 20
+  const x0 = 14
+  const x1 = W - 14
+  const gap = 2.4
+  const cw = (x1 - x0 - gap * (n - 1)) / n
+  const cy = 11
+  const ch = 18
+  const cells = Array.from({ length: n }, (_, i) =>
+    `<rect x="${(x0 + i * (cw + gap)).toFixed(2)}" y="${cy}" width="${cw.toFixed(2)}" height="${ch}" rx="2.2"/>`).join('')
+  const sweep = (delay: number, opacity: number) =>
+    `<g opacity="${opacity}"><ellipse cx="0" cy="${H / 2}" rx="34" ry="15" fill="url(#halo)"/><ellipse cx="0" cy="${H / 2}" rx="11" ry="8" fill="url(#core)"/>` +
+    `<animateTransform attributeName="transform" type="translate" values="${x0 + cw / 2};${x1 - cw / 2};${x0 + cw / 2}" keyTimes="0;0.5;1" ` +
+    `calcMode="spline" keySplines="0.42 0 0.58 1;0.42 0 0.58 1" dur="1.9s" begin="-${delay}s" repeatCount="indefinite"/></g>`
+  const light =
+    state === 'work'
+      ? [0.32, 0.24, 0.16, 0.08, 0].map((d, i) => sweep(d, [0.12, 0.22, 0.38, 0.6, 1][i] ?? 1)).join('')
+      : `<rect x="${x0}" y="${cy}" width="${x1 - x0}" height="${ch}" fill="url(#full)">` +
+        (state === 'ask' ? '<animate attributeName="opacity" values="1;0.5;1" dur="1.6s" repeatCount="indefinite"/>' : '') +
+        '</rect>'
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
+<defs>
+<linearGradient id="case" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4a4a52"/><stop offset="0.18" stop-color="#26262b"/><stop offset="0.55" stop-color="#121215"/><stop offset="1" stop-color="#2c2c32"/></linearGradient>
+<linearGradient id="bevel" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.45"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/><stop offset="1" stop-color="#000000" stop-opacity="0.6"/></linearGradient>
+<linearGradient id="slot" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000000"/><stop offset="0.5" stop-color="#0a0a0c"/><stop offset="1" stop-color="#18181c"/></linearGradient>
+<linearGradient id="off" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${t.off}"/><stop offset="0.5" stop-color="#050505"/><stop offset="1" stop-color="${t.off}"/></linearGradient>
+<radialGradient id="halo"><stop offset="0" stop-color="${t.hot}"/><stop offset="0.45" stop-color="${t.hot}" stop-opacity="0.75"/><stop offset="1" stop-color="${t.deep}" stop-opacity="0"/></radialGradient>
+<radialGradient id="core"><stop offset="0" stop-color="${t.core}"/><stop offset="0.5" stop-color="${t.hot}" stop-opacity="0.9"/><stop offset="1" stop-color="${t.hot}" stop-opacity="0"/></radialGradient>
+<linearGradient id="full" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${t.deep}"/><stop offset="0.35" stop-color="${t.hot}"/><stop offset="0.5" stop-color="${t.core}" stop-opacity="0.85"/><stop offset="0.65" stop-color="${t.hot}"/><stop offset="1" stop-color="${t.deep}"/></linearGradient>
+<linearGradient id="glass" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.34"/><stop offset="0.45" stop-color="#ffffff" stop-opacity="0.05"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+<mask id="leds"><rect width="${W}" height="${H}" fill="#000"/><g fill="#fff">${cells}</g></mask>
+<clipPath id="inner"><rect x="9" y="7" width="${W - 18}" height="${H - 14}" rx="5"/></clipPath>
+<filter id="bloom" x="-20%" y="-60%" width="140%" height="220%"><feGaussianBlur stdDeviation="3.2"/></filter>
+<g id="light">${light}</g>
+</defs>
+<rect x="1" y="1" width="${W - 2}" height="${H - 2}" rx="10" fill="url(#case)" stroke="#000" stroke-width="1.2"/>
+<rect x="2" y="2" width="${W - 4}" height="${H - 4}" rx="9" fill="none" stroke="url(#bevel)" stroke-width="1.4"/>
+<rect x="9" y="7" width="${W - 18}" height="${H - 14}" rx="5" fill="url(#slot)" stroke="#000" stroke-opacity="0.9"/>
+<g fill="url(#off)">${cells}</g>
+<g clip-path="url(#inner)"><g filter="url(#bloom)" opacity="0.7"><use href="#light"/></g></g>
+<g mask="url(#leds)"><use href="#light"/></g>
+<rect x="10" y="8" width="${W - 20}" height="${(H - 16) / 2}" rx="4" fill="url(#glass)"/>
+<rect x="9.5" y="7.5" width="${W - 19}" height="${H - 15}" rx="5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+</svg>`
+}
+
+// Percent of the task list done (a running step counts half); null without a list.
+function planPct(steps: Step[]): number | null {
+  if (!steps.length) return null
+  const done = steps.filter(s => s.status === 'completed').length
+  const active = steps.some(s => s.status === 'in_progress') ? 0.5 : 0
+  return Math.floor(Math.min(1, (done + active) / steps.length) * 100)
+}
 
 // Mirrors the desktop task list tool: a full `items` list, or `advance`, `done` (1-based) and `start` on the current one.
 function applyPlan(steps: Step[], input: Record<string, unknown>): Step[] {
@@ -132,6 +202,7 @@ export const register: Register = on => {
   // Tokens and turns of the main turn plus any subagents since the last main turn ended.
   let pending: Totals = ZERO
   let ticker: { cancel: () => void } | undefined
+  let askAfter = false
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
@@ -144,6 +215,7 @@ export const register: Register = on => {
         await update($, turnStart, t => t || now)
       }
       await update($, nowAtom, () => now)
+      await update($, status, () => 'work')
       ticker?.cancel()
       ticker = $.clock.every(1000, async () => {
         const t = await $.clock.now()
@@ -161,17 +233,42 @@ export const register: Register = on => {
 
   on('tool.call', { tool: WRAP_TOOL }, async ($, e, next) => {
     await update($, plan, steps => (steps ?? []).map(s => ({ ...s, status: 'completed' })))
+    // A wrap-up that asks something leaves the turn waiting on the person.
+    if ((e as unknown as { ask?: string }).ask) askAfter = true
     return next(e)
+  })
+
+  on('tool.call', { tool: ASK_TOOLS }, async ($, e, next) => {
+    await update($, status, () => 'ask')
+    try {
+      return await next(e)
+    } finally {
+      await update($, status, s => (s === 'ask' ? 'work' : s))
+    }
   })
 
   // The desktop never raises the hint line under the prompt; these two are the spots it draws.
   // Band above the prompt, while a turn runs.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const line = await liveLine($)
-    if (!line) return next(e)
-    const { Text } = $.ui.resolve(e)
-    return <Text>{line}</Text>
+    // Reads neither clock nor elapsed time, so it redraws only when the state or the list changes.
+    const [state, steps] = await Promise.all([read($, status), read($, plan)])
+    if (state === 'idle') return next(e)
+    const pct = state === 'done' ? 100 : planPct(steps)
+    const label = pct === null ? '' : `${pct}%`
+    if (e.surface === 'terminal') {
+      // ponytail: the terminal has no Svg; a plain colored bar there
+      const { Text } = $.ui.resolve(e)
+      const color = state === 'done' ? '#25e06a' : state === 'ask' ? '#ffa20f' : '#ff2414'
+      return <Text><Text color={color}>{'▬'.repeat(12)}</Text>{label ? ` ${label}` : ''}</Text>
+    }
+    const { Box, Svg, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="row" alignItems="center" gap={1}>
+        <Svg key="scanner" source={scannerSvg(state)} alt={`Status: ${state}`} isInteractive width={SCAN_PX.width} height={SCAN_PX.height} />
+        {label ? <Text bold>{label}</Text> : null}
+      </Box>
+    )
   })
 
   // The working spinner row.
@@ -208,6 +305,8 @@ export const register: Register = on => {
       ticker?.cancel()
       ticker = undefined
       await update($, nowAtom, () => 0)
+      await update($, status, () => (e.isAborted ? 'idle' : askAfter ? 'ask' : 'done'))
+      askAfter = false
       const done = pending
       pending = ZERO
       await update($, last, () => done)

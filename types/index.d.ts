@@ -14,6 +14,7 @@ declare module 'claude-code' {
       plan: Shaped<Step[]>
       turnStart: number
       now: number
+      status: string
     }
   }
 }

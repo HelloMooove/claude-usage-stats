@@ -87,11 +87,56 @@ test('the band above the prompt and the spinner show task list progress', async 
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const band = await $.ui.mount({ plugin: 'usage-stats', surface, component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false } as never })
-    expect((await band.find({ type: 'Text' }))?.text ?? '').toContain(want)
+    // The band holds the scanner and the percent alone; the spinner keeps the full line.
+    const texts = (await band.findAll({ type: 'Text' })).map(t => t.text)
+    expect(texts.some(t => t.includes('37%'))).toBe(true)
+    expect(texts.some(t => t.includes('step 2/4'))).toBe(false)
     await band.unmount()
     const spin = await $.ui.mount({ plugin: 'usage-stats', surface, component: 'Spinner', requestId: 'main',
       props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } })
     expect((await spin.find({ type: 'Text' }))?.text ?? '').toContain(`Working · ██`)
     await spin.unmount()
   }
+})
+
+test('the scanner: red sweep while working, green when finished, amber when a question waits', async ($, on) => {
+  on('clock.now', () => ({ value: Date.parse('2026-11-10T12:00:00Z') }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', () => ({ result: {} }))
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  const band = async () => {
+    const ui = await $.ui.mount({ plugin: 'usage-stats', surface: 'desktop', component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false } as never })
+    const svg = String((await ui.find({ type: 'Svg' }))?.props.source ?? '')
+    const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+    await ui.unmount()
+    return { svg, texts }
+  }
+  const complete = () => $.turn.complete({ answer: '', durationMs: 5000, isAborted: false, turnId: 't1', reason: 'answer' })
+
+  expect((await band()).svg).toBe('') // idle: no bar
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  let b = await band()
+  expect(b.svg).toContain('#ff2414')
+  expect(b.svg).toContain('animateTransform') // the sweep
+  expect(b.texts).toEqual([]) // no list yet: no percent
+
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: [{ content: 'a', status: 'completed' }, { content: 'b', status: 'pending' }] } as never)
+  expect((await band()).texts).toContain('50%')
+
+  await complete()
+  b = await band()
+  expect(b.svg).toContain('#25e06a')
+  expect(b.svg).not.toContain('animate')
+  expect(b.texts).toContain('100%')
+
+  await $.turn.start({ text: 'again', turnId: 't2' })
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'r', ask: 'Ship it?' } as never)
+  await complete()
+  b = await band()
+  expect(b.svg).toContain('#ffa20f')
+  expect(b.svg).toContain('attributeName="opacity"') // breathing
 })
