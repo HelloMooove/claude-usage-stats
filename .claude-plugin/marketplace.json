@@ -1,0 +1,5 @@
+{
+  "name": "claude-usage-stats",
+  "owner": { "name": "HelloMooove" },
+  "plugins": [{ "name": "usage-stats", "source": "./" }]
+}
