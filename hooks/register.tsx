@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Limit, Step, Totals } from '../types'
+import type { AgentRow, Limit, Step, Totals } from '../types'
 
 const PANE = 'usage-stats'
 const TITLE = 'Usage'
@@ -16,6 +16,8 @@ const limits = atom({ plugin: 'usage-stats', key: 'limits' } as const, [], { sha
 const plan = atom({ plugin: 'usage-stats', key: 'plan' } as const, [], { shape: 's1' })
 // idle (no bar), work (red scanner), done (green), ask (orange: a question waits for the person)
 const status = atom({ plugin: 'usage-stats', key: 'status' } as const, 'idle')
+// The agents started since the person's last message, in start order.
+const agents = atom({ plugin: 'usage-stats', key: 'agents' } as const, [], { shape: 'a1' })
 
 const PLAN_TOOL = 'mcp__ccd_turn__update_plan'
 const WRAP_TOOL = 'mcp__ccd_turn__wrap_up'
@@ -78,6 +80,14 @@ function scannerSvg(state: string): string {
 <rect x="10" y="8" width="${W - 20}" height="${(H - 16) / 2}" rx="4" fill="url(#glass)"/>
 <rect x="9.5" y="7.5" width="${W - 19}" height="${H - 15}" rx="5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
 </svg>`
+}
+
+// 'claude-sonnet-5-5' -> 'Sonnet 5.5', 'haiku' -> 'Haiku'; anything else as given.
+function modelName(model: string): string {
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(model)
+  const cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1)
+  if (m) return `${cap(m[1] ?? '')} ${m[2]}${m[3] ? `.${m[3]}` : ''}`
+  return /^[a-z]+$/.test(model) ? cap(model) : model
 }
 
 // Percent of the task list done (a running step counts half); null without a list.
@@ -178,11 +188,16 @@ export const register: Register = on => {
   // Tokens and turns of the main turn plus any subagents since the last main turn ended.
   let pending: Totals = ZERO
   let askAfter = false
+  // Efforts the Agent calls asked for, by description, until their spawn picks them up.
+  const efforts = new Map<string, string[]>()
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       // A turn the person started gets a fresh task list; a continuation keeps it.
-      if (e.text) await update($, plan, () => [])
+      if (e.text) {
+        await update($, plan, () => [])
+        await update($, agents, () => [])
+      }
       await update($, status, () => 'work')
     }
     return next(e)
@@ -256,6 +271,27 @@ export const register: Register = on => {
     return { text: 'Usage stats pane opened.' }
   })
 
+  // The Agent call carries the effort asked for; the spawn below carries the model it really runs on.
+  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    const input = e as unknown as { description?: string; effort?: string | number }
+    if (input.description && input.effort !== undefined) {
+      const list = efforts.get(input.description) ?? []
+      list.push(String(input.effort))
+      efforts.set(input.description, list)
+    }
+    return next(e)
+  })
+
+  on('agent.spawn', async ($, e, next) => {
+    const r = await next(e)
+    if (r.deny === undefined && r.agentId) {
+      const effort = e.fork ? 'fork' : efforts.get(e.description)?.shift() ?? 'default'
+      const row: AgentRow = { id: r.agentId, name: e.description || e.subagentType, model: modelName(r.model), effort, state: 'run', tokens: 0, ms: 0 }
+      await update($, agents, list => [...(list ?? []).filter(a => a.id !== row.id), row])
+    }
+    return r
+  })
+
   on('turn.complete', async ($, e, next) => {
     const u = e.usage
     const tokens = u
@@ -265,6 +301,11 @@ export const register: Register = on => {
     // Subagents run inside the main turn, so only the main loop's wall clock counts as time.
     const delta: Partial<Totals> = isMain ? { tokens, ms: e.durationMs, turns: 1 } : { tokens }
     pending = plus(pending, delta)
+    if (!isMain) {
+      const id = e.agentId
+      await update($, agents, list =>
+        (list ?? []).map(a => (a.id === id ? { ...a, state: 'done', tokens: a.tokens + tokens, ms: a.ms + e.durationMs } : a)))
+    }
     if (isMain) {
       await update($, status, () => (e.isAborted ? 'idle' : askAfter ? 'ask' : 'done'))
       askAfter = false
@@ -297,13 +338,14 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const now = await $.clock.now()
-    const [l, t, p, w, name, lim] = await Promise.all([
+    const [l, t, p, w, name, lim, ags] = await Promise.all([
       read($, last),
       read($, task),
       read($, project),
       read($, week),
       read($, projectName),
       read($, limits),
+      read($, agents),
     ])
     // One line per total: label, est. API cost, then tokens and time dimmed.
     const row = (label: string, v: Totals) => (
@@ -329,6 +371,19 @@ export const register: Register = on => {
         {row('Task', t)}
         {row('Last', l)}
         <Text dimColor>est. API cost{name ? ` · ${name}` : ''}</Text>
+        {ags.length ? (
+          <Box marginTop={1}>
+            <Text bold>Agents</Text>
+          </Box>
+        ) : null}
+        {ags.map((a: AgentRow) => (
+          <Text>
+            <Text color={a.state === 'run' ? '#ff2414' : '#25e06a'}>{a.state === 'run' ? '●' : '✓'}</Text>{' '}
+            {a.name.length > 18 ? a.name.slice(0, 17) + '…' : a.name.padEnd(18)}{' '}
+            <Text bold>{a.model}</Text> · {a.effort}
+            {a.state === 'done' ? <Text dimColor>{'  '}{fmtTokens(a.tokens)} · {fmtTime(a.ms)}</Text> : null}
+          </Text>
+        ))}
       </Box>
     )
   })

@@ -1,6 +1,6 @@
 {
   "name": "usage-stats",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Sidebar pane with tokens, time and estimated API cost for the current task, the project and the week, plus a Knight Rider status scanner and task progress",
   "author": { "name": "HelloMooove" },
   "types": "./types/index.d.ts"

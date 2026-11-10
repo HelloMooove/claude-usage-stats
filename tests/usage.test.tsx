@@ -140,3 +140,43 @@ test('the scanner: red sweep while working, green when finished, amber when a qu
   expect(b.svg).toContain('#ffa20f')
   expect(b.svg).toContain('attributeName="opacity"') // breathing
 })
+
+test('the pane lists the agents of the task with the model they run on and their effort', async ($, on) => {
+  const store = new Map<string, unknown>()
+  on('store.get', (_, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_, e) => (store.set(e.key, e.value), { value: undefined }))
+  on('store.keys', () => ({ value: [...store.keys()] }))
+  on('session.id', () => ({ value: 'me' }))
+  on('session.root', () => ({ value: '/p' }))
+  on('clock.now', () => ({ value: Date.parse('2026-11-10T12:00:00Z') }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', () => ({ result: {} }))
+  let n = 0
+  const models: Record<string, string> = { 'Find auth code': 'claude-haiku-5-5', 'Write tests': 'claude-sonnet-5-5' }
+  on('agent.spawn', (_, e) => ({ model: models[e.description] ?? 'claude-opus-5-5', agentId: `a${++n}` }))
+  const spawn = (description: string) =>
+    $.agent.spawn({ prompt: 'p', description, subagentType: 'general-purpose', provider: 'core', parentModel: 'claude-fable-5-2', background: true, fork: false } as never)
+
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call({ tool: 'Agent', description: 'Find auth code', prompt: 'p', effort: 'high' } as never)
+  await spawn('Find auth code')
+  await spawn('Write tests') // no effort asked: the default applies
+  await $.turn.complete({ answer: '', durationMs: 40_000, isAborted: false, turnId: 'x1', reason: 'answer', agentId: 'a1',
+    usage: { model: 'm', input_tokens: 100_000, output_tokens: 20_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
+
+  const ui = await $.ui.mount({ plugin: 'usage-stats', surface: 'desktop', component: 'Pane', requestId: 'usage-stats',
+    props: { title: 'Usage', isFocused: false, bodyColumns: 40, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  await ui.unmount()
+  expect(texts).toContain('Agents')
+  expect(texts).toContain('✓ Find auth code     Haiku 5.5 · high  120.0k · 40s')
+  expect(texts).toContain('● Write tests        Sonnet 5.5 · default')
+
+  // The person's next message starts a fresh list.
+  await $.turn.start({ text: 'next', turnId: 't2' })
+  const again = await $.ui.mount({ plugin: 'usage-stats', surface: 'desktop', component: 'Pane', requestId: 'usage-stats',
+    props: { title: 'Usage', isFocused: false, bodyColumns: 40, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } })
+  expect((await again.findAll({ type: 'Text' })).map(t => t.text)).not.toContain('Agents')
+  await again.unmount()
+})

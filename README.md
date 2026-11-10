@@ -7,6 +7,7 @@ A Claude Code mod that shows what your work costs and how far along it is.
 - Weekly and 5-hour limit used, with time to reset
 - This week (all projects), this project, this task (session) and the last turn
 - For each: estimated API cost, tokens and time
+- **Agents** started since your last message: the model each really runs on, its effort (`default` when none was asked for), and its tokens and time once it finishes
 
 **Status scanner** in the band above the prompt, with the percent done next to it:
 

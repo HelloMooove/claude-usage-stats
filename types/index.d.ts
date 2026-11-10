@@ -1,6 +1,7 @@
 export type Totals = { tokens: number; ms: number; usd: number; turns: number }
 export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 export type Step = { content: string; status: string }
+export type AgentRow = { id: string; name: string; model: string; effort: string; state: string; tokens: number; ms: number }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -13,6 +14,7 @@ declare module 'claude-code' {
       limits: Shaped<Limit[]>
       plan: Shaped<Step[]>
       status: string
+      agents: Shaped<AgentRow[]>
     }
   }
 }
