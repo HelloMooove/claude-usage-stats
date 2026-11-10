@@ -114,12 +114,12 @@ const fmtLeft = (iso: string | undefined, now: number) => {
   const left = Date.parse(iso) - now
   if (!(left > 0)) return ''
   const h = Math.floor(left / 3_600_000)
-  return h >= 24 ? ` · resets in ${Math.floor(h / 24)}d ${h % 24}h` : ` · resets in ${h}h ${Math.floor((left % 3_600_000) / 60_000)}m`
+  return h >= 24 ? ` · resets ${Math.floor(h / 24)}d ${h % 24}h` : ` · resets ${h}h ${Math.floor((left % 3_600_000) / 60_000)}m`
 }
 const LIMIT_NAMES: Record<string, string> = {
-  seven_day: 'Weekly limit',
-  five_hour: '5-hour limit',
-  spend_limit: 'Spend limit',
+  seven_day: 'Weekly',
+  five_hour: '5-hour',
+  spend_limit: 'Spend',
 }
 
 // The live line while a turn runs; '' when idle (nowAtom is zeroed at the main turn's end).
@@ -182,7 +182,7 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'usage-stats', description: 'Show the usage stats pane' })
-    void $.ui.open({ id: PANE, title: TITLE })
+    void $.ui.open({ id: PANE, title: TITLE, columns: 30, rows: 7 })
     void refresh($)
     // Other sessions add to project and week totals; pick those up now and then.
     $.clock.every(60_000, () => void refresh($))
@@ -191,7 +191,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'usage-stats' }, async $ => {
     await refresh($)
-    await $.ui.open({ id: PANE, title: TITLE })
+    await $.ui.open({ id: PANE, title: TITLE, columns: 30, rows: 7 })
     return { text: 'Usage stats pane opened.' }
   })
 
@@ -245,20 +245,16 @@ export const register: Register = on => {
       read($, projectName),
       read($, limits),
     ])
-    const row = (label: string, v: Totals, note?: string) => (
-      <Box flexDirection="column" marginBottom={1}>
-        <Text bold>
-          {label}
-          {note ? <Text dimColor> {note}</Text> : null}
-        </Text>
-        <Text>
-          {fmtUsd(v.usd)} <Text dimColor>est. API</Text>
-        </Text>
+    // One line per total: label, est. API cost, then tokens and time dimmed.
+    const row = (label: string, v: Totals) => (
+      <Text>
+        <Text bold>{label.padEnd(8)}</Text>
+        {fmtUsd(v.usd).padStart(6)}
         <Text dimColor>
-          {fmtTokens(v.tokens)} tokens · {fmtTime(v.ms)}
-          {v.turns ? ` · ${v.turns} turns` : ''}
+          {'  '}
+          {fmtTokens(v.tokens)} · {fmtTime(v.ms)}
         </Text>
-      </Box>
+      </Text>
     )
     return (
       <Box flexDirection="column">
@@ -268,11 +264,11 @@ export const register: Register = on => {
             <Text dimColor>{fmtLeft(r.resetsAt, now)}</Text>
           </Text>
         ))}
-        {lim.length ? <Text> </Text> : null}
-        {row('This week', w, '(all projects)')}
-        {row('Project', p, name ? `(${name})` : '')}
-        {row('This task', t)}
-        {row('Last turn', l)}
+        {row('Week', w)}
+        {row('Project', p)}
+        {row('Task', t)}
+        {row('Last', l)}
+        <Text dimColor>est. API cost{name ? ` · ${name}` : ''}</Text>
       </Box>
     )
   })

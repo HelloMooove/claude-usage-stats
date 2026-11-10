@@ -47,13 +47,17 @@ test('a turn and its cost land in task, project and week', async ($, on) => {
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    expect((await ui.find({ type: 'Text', text: /Weekly limit/ }))?.text).toContain('42%')
+    expect((await ui.find({ type: 'Text', text: /Weekly/ }))?.text).toContain('42%')
     const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
-    // Order: week, project, task, last turn.
-    const usd = texts.filter(t => t.startsWith('$'))
-    expect(usd).toEqual(['$1.50 est. API', '$1.50 est. API', '$0.50 est. API', '$0.50 est. API'])
-    expect(texts).toContain('1.0k tokens · 1m 30s · 1 turns')
-    expect(texts).toContain('2.0k tokens · 2m 30s · 2 turns')
+    // One line each, in order: week, project, task, last turn.
+    const rows = texts.filter(t => /^(Week|Project|Task|Last) +\$/.test(t))
+    expect(rows).toEqual([
+      'Week     $1.50  2.0k · 2m 30s',
+      'Project  $1.50  2.0k · 2m 30s',
+      'Task     $0.50  1.0k · 1m 30s',
+      'Last     $0.50  1.0k · 1m 30s',
+    ])
+    expect(texts).toContain('est. API cost · p')
     await ui.unmount()
   }
 })

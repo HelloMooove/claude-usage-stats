@@ -1,6 +1,6 @@
 {
   "name": "usage-stats",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Sidebar pane with tokens, time and estimated API cost for the current task, the project and the week, plus a live task progress bar",
   "author": { "name": "HelloMooove" },
   "types": "./types/index.d.ts"
