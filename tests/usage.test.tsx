@@ -62,17 +62,24 @@ test('a turn and its cost land in task, project and week', async ($, on) => {
   }
 })
 
-test('the band above the prompt and the spinner show task list progress', async ($, on) => {
-  let now = Date.parse('2026-11-10T12:00:00Z')
-  on('clock.now', () => ({ value: now }))
+test('the band and the spinner show the percent of the task list done', async ($, on) => {
+  on('clock.now', () => ({ value: Date.parse('2026-11-10T12:00:00Z') }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('tool.call', () => ({ result: {} }))
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>{e.component === 'Spinner' ? `Working${(e.props as { suffix: string }).suffix}` : 'engine'}</Text>
   })
+  const spinner = async (surface: 'terminal' | 'desktop') => {
+    const ui = await $.ui.mount({ plugin: 'usage-stats', surface, component: 'Spinner', requestId: 'main',
+      props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } })
+    const text = (await ui.find({ type: 'Text' }))?.text ?? ''
+    await ui.unmount()
+    return text
+  }
 
   await $.turn.start({ text: 'build it', turnId: 't1' })
+  expect(await spinner('desktop')).toBe('Working…') // no task list: the app's own suffix
   await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: [
     { content: 'Read code', status: 'in_progress' },
     { content: 'Write code', status: 'pending' },
@@ -80,22 +87,15 @@ test('the band above the prompt and the spinner show task list progress', async 
     { content: 'Ship', status: 'pending' },
   ] } as never)
   await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', advance: true } as never)
-  now += 60_000
-  // Step 1 of 4 done, step 2 running: 37%, and 60s for 37.5% leaves ~1m 40s.
-  await $.turn.start({ text: '', turnId: 't2' }) // a continuation keeps the list and the clock
-  const want = '37% · step 2/4: Write code · 1m 0s · ~1m 40s left'
+  // Step 1 of 4 done, step 2 running: 37%.
+  await $.turn.start({ text: '', turnId: 't2' }) // a continuation keeps the list
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const band = await $.ui.mount({ plugin: 'usage-stats', surface, component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false } as never })
-    // The band holds the scanner and the percent alone; the spinner keeps the full line.
     const texts = (await band.findAll({ type: 'Text' })).map(t => t.text)
     expect(texts.some(t => t.includes('37%'))).toBe(true)
-    expect(texts.some(t => t.includes('step 2/4'))).toBe(false)
     await band.unmount()
-    const spin = await $.ui.mount({ plugin: 'usage-stats', surface, component: 'Spinner', requestId: 'main',
-      props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } })
-    expect((await spin.find({ type: 'Text' }))?.text ?? '').toContain(`Working · ██`)
-    await spin.unmount()
+    expect(await spinner(surface)).toBe('Working · 37%')
   }
 })
 

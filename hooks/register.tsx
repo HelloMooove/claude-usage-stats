@@ -14,8 +14,6 @@ const week = atom({ plugin: 'usage-stats', key: 'week' } as const, ZERO, { shape
 const projectName = atom({ plugin: 'usage-stats', key: 'projectName' } as const, '')
 const limits = atom({ plugin: 'usage-stats', key: 'limits' } as const, [], { shape: 'l1' })
 const plan = atom({ plugin: 'usage-stats', key: 'plan' } as const, [], { shape: 's1' })
-const turnStart = atom({ plugin: 'usage-stats', key: 'turnStart' } as const, 0)
-const nowAtom = atom({ plugin: 'usage-stats', key: 'now' } as const, 0)
 // idle (no bar), work (red scanner), done (green), ask (orange: a question waits for the person)
 const status = atom({ plugin: 'usage-stats', key: 'status' } as const, 'idle')
 
@@ -109,22 +107,6 @@ function applyPlan(steps: Step[], input: Record<string, unknown>): Step[] {
   return next
 }
 
-// ponytail: ETA assumes every step takes as long as the average finished one; the model's steps vary a lot
-function progressLine(steps: Step[], elapsedMs: number): string {
-  const total = steps.length
-  if (!total) return `Working · ${fmtTime(elapsedMs)}`
-  const done = steps.filter(s => s.status === 'completed').length
-  const activeIdx = steps.findIndex(s => s.status === 'in_progress')
-  const frac = Math.min(1, (done + (activeIdx >= 0 ? 0.5 : 0)) / total)
-  const width = 10
-  const filled = Math.round(frac * width)
-  const bar = '█'.repeat(filled) + '░'.repeat(width - filled)
-  const stepNo = activeIdx >= 0 ? activeIdx + 1 : Math.min(done + 1, total)
-  const name = steps[stepNo - 1]?.content ?? ''
-  const eta = done > 0 && frac < 1 ? ` · ~${fmtTime((elapsedMs * (1 - frac)) / frac)} left` : ''
-  return `${bar} ${Math.floor(frac * 100)}% · step ${stepNo}/${total}: ${name.length > 32 ? name.slice(0, 31) + '…' : name} · ${fmtTime(elapsedMs)}${eta}`
-}
-
 // Ledger in $.store (shared by every session that loads this mod):
 //   l:<sessionId>:<YYYY-MM-DD> -> Entry   (each session writes only its own keys, so no write races)
 //   c:<sessionId>              -> last session cost seen, to turn the running total into deltas
@@ -192,35 +174,16 @@ const LIMIT_NAMES: Record<string, string> = {
   spend_limit: 'Spend',
 }
 
-// The live line while a turn runs; '' when idle (nowAtom is zeroed at the main turn's end).
-async function liveLine($: EngineInterface): Promise<string> {
-  const [steps, start, now] = await Promise.all([read($, plan), read($, turnStart), read($, nowAtom)])
-  return start && now ? progressLine(steps, Math.max(0, now - start)) : ''
-}
-
 export const register: Register = on => {
   // Tokens and turns of the main turn plus any subagents since the last main turn ended.
   let pending: Totals = ZERO
-  let ticker: { cancel: () => void } | undefined
   let askAfter = false
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
-      const now = await $.clock.now()
-      // A turn the person started gets a fresh task list and clock; a continuation keeps both.
-      if (e.text) {
-        await update($, plan, () => [])
-        await update($, turnStart, () => now)
-      } else {
-        await update($, turnStart, t => t || now)
-      }
-      await update($, nowAtom, () => now)
+      // A turn the person started gets a fresh task list; a continuation keeps it.
+      if (e.text) await update($, plan, () => [])
       await update($, status, () => 'work')
-      ticker?.cancel()
-      ticker = $.clock.every(1000, async () => {
-        const t = await $.clock.now()
-        await update($, nowAtom, () => t)
-      })
     }
     return next(e)
   })
@@ -271,10 +234,11 @@ export const register: Register = on => {
     )
   })
 
-  // The working spinner row.
+  // The working spinner row: the percent done after the app's own words.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    const line = await liveLine($)
-    return line ? next({ ...e, props: { ...e.props, suffix: ` · ${line}` } }) : next(e)
+    const [state, steps] = await Promise.all([read($, status), read($, plan)])
+    const pct = state === 'idle' ? null : planPct(steps)
+    return pct === null ? next(e) : next({ ...e, props: { ...e.props, suffix: ` · ${pct}%` } })
   })
 
   on('session.start', async ($, e, next) => {
@@ -302,9 +266,6 @@ export const register: Register = on => {
     const delta: Partial<Totals> = isMain ? { tokens, ms: e.durationMs, turns: 1 } : { tokens }
     pending = plus(pending, delta)
     if (isMain) {
-      ticker?.cancel()
-      ticker = undefined
-      await update($, nowAtom, () => 0)
       await update($, status, () => (e.isAborted ? 'idle' : askAfter ? 'ask' : 'done'))
       askAfter = false
       const done = pending

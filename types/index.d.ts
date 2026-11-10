@@ -12,8 +12,6 @@ declare module 'claude-code' {
       projectName: string
       limits: Shaped<Limit[]>
       plan: Shaped<Step[]>
-      turnStart: number
-      now: number
       status: string
     }
   }

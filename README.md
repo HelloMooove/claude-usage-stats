@@ -16,13 +16,9 @@ A Claude Code mod that shows what your work costs and how far along it is.
 
 The desktop app draws it as an animated vector image; the terminal draws a plain colored bar.
 
-**Progress line** on the working spinner:
+The working spinner shows the same percent after its own words (`Working · 37%`).
 
-```
-████░░░░░░ 37% · step 2/4: Write code · 1m 0s · ~1m 40s left
-```
-
-The percentage follows Claude's task list (finished steps count fully, the running step counts half). The time left is a rough estimate from the pace of the finished steps. Without a task list it shows elapsed time only.
+The percent follows Claude's task list: finished steps count fully, the running step counts half. Without a task list no percent shows.
 
 ## Install
 
