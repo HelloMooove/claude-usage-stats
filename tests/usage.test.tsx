@@ -180,3 +180,36 @@ test('the pane lists the agents of the task with the model they run on and their
   expect((await again.findAll({ type: 'Text' })).map(t => t.text)).not.toContain('Agents')
   await again.unmount()
 })
+
+test('background agents still running keep the scanner red and the percent below 100', async ($, on) => {
+  on('clock.now', () => ({ value: Date.parse('2026-11-10T12:00:00Z') }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', () => ({ result: {} }))
+  on('agent.spawn', () => ({ model: 'claude-sonnet-5-5', agentId: 'a1' }))
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  const band = async () => {
+    const ui = await $.ui.mount({ plugin: 'usage-stats', surface: 'desktop', component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false } as never })
+    const svg = String((await ui.find({ type: 'Svg' }))?.props.source ?? '')
+    const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+    await ui.unmount()
+    return { svg, texts }
+  }
+
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: [{ content: 'a', status: 'completed' }] } as never)
+  await $.agent.spawn({ prompt: 'p', description: 'Bg work', subagentType: 'general-purpose', provider: 'core', parentModel: 'm', background: true, fork: false } as never)
+  await $.turn.complete({ answer: '', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer' })
+  let b = await band()
+  expect(b.svg).toContain('#ff2414')
+  expect(b.texts).toContain('99%')
+
+  // The last agent back: green, 100%.
+  await $.turn.complete({ answer: '', durationMs: 1000, isAborted: false, turnId: 'x1', reason: 'answer', agentId: 'a1' })
+  b = await band()
+  expect(b.svg).toContain('#25e06a')
+  expect(b.texts).toContain('100%')
+})

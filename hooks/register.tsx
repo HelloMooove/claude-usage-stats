@@ -14,7 +14,8 @@ const week = atom({ plugin: 'usage-stats', key: 'week' } as const, ZERO, { shape
 const projectName = atom({ plugin: 'usage-stats', key: 'projectName' } as const, '')
 const limits = atom({ plugin: 'usage-stats', key: 'limits' } as const, [], { shape: 'l1' })
 const plan = atom({ plugin: 'usage-stats', key: 'plan' } as const, [], { shape: 's1' })
-// idle (no bar), work (red scanner), done (green), ask (orange: a question waits for the person)
+// idle (no bar), work (red scanner), wait (red: turn ended, background agents still run),
+// done (green), ask (orange: a question waits for the person)
 const status = atom({ plugin: 'usage-stats', key: 'status' } as const, 'idle')
 // The agents started since the person's last message, in start order.
 const agents = atom({ plugin: 'usage-stats', key: 'agents' } as const, [], { shape: 'a1' })
@@ -90,12 +91,16 @@ function modelName(model: string): string {
   return /^[a-z]+$/.test(model) ? cap(model) : model
 }
 
+const running = (list: AgentRow[]) => list.some(a => a.state === 'run')
+
 // Percent of the task list done (a running step counts half); null without a list.
-function planPct(steps: Step[]): number | null {
+// While agents still run nothing is finished, so it stops at 99.
+function planPct(steps: Step[], busy = false): number | null {
   if (!steps.length) return null
   const done = steps.filter(s => s.status === 'completed').length
   const active = steps.some(s => s.status === 'in_progress') ? 0.5 : 0
-  return Math.floor(Math.min(1, (done + active) / steps.length) * 100)
+  const pct = Math.floor(Math.min(1, (done + active) / steps.length) * 100)
+  return busy ? Math.min(pct, 99) : pct
 }
 
 // Mirrors the desktop task list tool: a full `items` list, or `advance`, `done` (1-based) and `start` on the current one.
@@ -230,9 +235,11 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     // Reads neither clock nor elapsed time, so it redraws only when the state or the list changes.
-    const [state, steps] = await Promise.all([read($, status), read($, plan)])
-    if (state === 'idle') return next(e)
-    const pct = state === 'done' ? 100 : planPct(steps)
+    const [raw, steps, ags] = await Promise.all([read($, status), read($, plan), read($, agents)])
+    if (raw === 'idle') return next(e)
+    // 'wait': the main turn ended but background agents still run; drawn as work.
+    const state = raw === 'wait' ? 'work' : raw
+    const pct = state === 'done' ? 100 : planPct(steps, running(ags))
     const label = pct === null ? '' : `${pct}%`
     if (e.surface === 'terminal') {
       // ponytail: the terminal has no Svg; a plain colored bar there
@@ -251,8 +258,8 @@ export const register: Register = on => {
 
   // The working spinner row: the percent done after the app's own words.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    const [state, steps] = await Promise.all([read($, status), read($, plan)])
-    const pct = state === 'idle' ? null : planPct(steps)
+    const [state, steps, ags] = await Promise.all([read($, status), read($, plan), read($, agents)])
+    const pct = state === 'idle' ? null : planPct(steps, running(ags))
     return pct === null ? next(e) : next({ ...e, props: { ...e.props, suffix: ` · ${pct}%` } })
   })
 
@@ -305,9 +312,13 @@ export const register: Register = on => {
       const id = e.agentId
       await update($, agents, list =>
         (list ?? []).map(a => (a.id === id ? { ...a, state: 'done', tokens: a.tokens + tokens, ms: a.ms + e.durationMs } : a)))
+      // The main turn ended while this agent ran: green once the last one is back.
+      if (!running(await read($, agents))) await update($, status, s => (s === 'wait' ? 'done' : s))
     }
     if (isMain) {
-      await update($, status, () => (e.isAborted ? 'idle' : askAfter ? 'ask' : 'done'))
+      // Background agents still running: the task is not finished, keep the red sweep.
+      const end = e.isAborted ? 'idle' : askAfter ? 'ask' : running(await read($, agents)) ? 'wait' : 'done'
+      await update($, status, () => end)
       askAfter = false
       const done = pending
       pending = ZERO
